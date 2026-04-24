@@ -1,5 +1,7 @@
 # GitPulse
 
+在线网址：https://gitpulse-one.vercel.app
+
 GitPulse 是一个基于 `Next.js 14 App Router`、`Tailwind CSS` 和 `shadcn/ui` 的 GitHub 开发者画像应用。输入任意 GitHub 用户名后，应用会聚合用户资料、仓库分布、贡献热力图、活跃时段和 AI 总结，并生成可分享的动态 OG 卡片。
 
 ![GitPulse 首页截图](./docs/screenshots/gitpulse-home.png)
