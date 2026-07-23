@@ -24,7 +24,6 @@ export default function App() {
   const [analysis, setAnalysis] = useState<ProfileAnalysis | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
   const requestId = useRef(0);
 
   const loadProfile = useCallback(async (rawUsername: string) => {
@@ -37,7 +36,6 @@ export default function App() {
     requestId.current = currentRequest;
     setLoading(true);
     setError(null);
-    setNotice(null);
 
     try {
       const nextAnalysis = await fetchProfileAnalysis(username);
@@ -93,59 +91,36 @@ export default function App() {
     }
   }
 
-  async function handleCopyLink() {
-    try {
-      await navigator.clipboard.writeText(window.location.href);
-      setNotice("分享链接已复制。");
-    } catch {
-      setNotice("无法自动复制，请从浏览器地址栏复制当前链接。");
-    }
-  }
-
   return (
     <div className="app-shell">
       <header className="site-header">
         <a className="brand" href="./" aria-label="AyayaGitSum 首页">
-          <span>A</span>
-          AyayaGitSum
+          AGS
         </a>
         <a
+          aria-label="查看 AyayaGitSum 源代码"
           href="https://github.com/ayaya114514/AyayaGitSum"
           target="_blank"
           rel="noreferrer"
         >
-          GitHub ↗
+          GitHub
         </a>
       </header>
 
       {loading && !analysis ? (
         <main className="loading-state" aria-live="polite">
-          <span className="loading-dot" />
-          <p>正在整理 GitHub 公开数据…</p>
+          <span className="loading-dot" aria-hidden="true" />
+          <span className="sr-only">读取中</span>
         </main>
       ) : analysis ? (
         <ProfileView
           analysis={analysis}
           loading={loading}
-          notice={notice}
           onSearch={handleSearch}
-          onCopyLink={handleCopyLink}
         />
       ) : (
-        <>
-          <EmptyState onSearch={handleSearch} />
-          {error ? (
-            <div className="error-toast" role="alert">
-              {error}
-            </div>
-          ) : null}
-        </>
+        <EmptyState error={error} onSearch={handleSearch} />
       )}
-
-      <footer className="site-footer">
-        <span>AyayaGitSum</span>
-        <span>Data from GitHub public REST API</span>
-      </footer>
     </div>
   );
 }
