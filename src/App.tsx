@@ -51,7 +51,7 @@ export default function App() {
             ? requestError.message
             : "发生了未知错误，请稍后再试。",
         );
-        document.title = "AyayaGitSum · GitHub 开发者概览";
+        document.title = "AyayaGitSum";
       }
     } finally {
       if (requestId.current === currentRequest) {
@@ -70,7 +70,7 @@ export default function App() {
         setAnalysis(null);
         setError(null);
         setLoading(false);
-        document.title = "AyayaGitSum · GitHub 开发者概览";
+        document.title = "AyayaGitSum";
       }
     }
 
@@ -93,20 +93,6 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <header className="site-header">
-        <a className="brand" href="./" aria-label="AyayaGitSum 首页">
-          AGS
-        </a>
-        <a
-          aria-label="查看 AyayaGitSum 源代码"
-          href="https://github.com/ayaya114514/AyayaGitSum"
-          target="_blank"
-          rel="noreferrer"
-        >
-          GitHub
-        </a>
-      </header>
-
       {loading && !analysis ? (
         <main className="loading-state" aria-live="polite">
           <span className="loading-dot" aria-hidden="true" />
