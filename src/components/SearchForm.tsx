@@ -38,12 +38,16 @@ export function SearchForm({
         id={inputId}
         value={value}
         onChange={(event) => setValue(event.target.value)}
-        placeholder="输入 GitHub 用户名"
+        placeholder="GitHub username"
         autoComplete="off"
         spellCheck={false}
       />
-      <button disabled={loading || !normalizeUsername(value)} type="submit">
-        {loading ? "读取中…" : "查看概览"}
+      <button
+        aria-label="查看 GitHub 用户"
+        disabled={loading || !normalizeUsername(value)}
+        type="submit"
+      >
+        {loading ? "…" : "→"}
       </button>
     </form>
   );
