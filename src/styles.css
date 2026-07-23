@@ -68,43 +68,14 @@ a {
   min-height: 100vh;
 }
 
-.site-header,
 .landing,
 .profile-page {
   width: min(880px, calc(100% - 40px));
   margin-inline: auto;
 }
 
-.site-header {
-  height: 64px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  border-bottom: 1px solid var(--line);
-}
-
-.site-header a {
-  text-decoration: none;
-}
-
-.site-header > a:last-child {
-  color: var(--muted);
-  font-size: 13px;
-}
-
-.site-header > a:last-child:hover {
-  color: var(--ink);
-}
-
-.brand {
-  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
-  font-size: 14px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-}
-
 .landing {
-  min-height: calc(100vh - 64px);
+  min-height: 100vh;
   display: grid;
   place-items: center;
   padding-bottom: 10vh;
@@ -114,11 +85,30 @@ a {
   width: min(560px, 100%);
 }
 
+.landing-brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
+
+.landing-brand img {
+  width: 44px;
+  height: 44px;
+}
+
 .landing h1 {
-  margin: 0 0 24px;
+  margin: 0;
   font-size: clamp(32px, 6vw, 48px);
   font-weight: 600;
   letter-spacing: -0.045em;
+  text-align: center;
+}
+
+.landing-description {
+  margin: 14px 0 24px;
+  color: var(--muted);
+  font-size: 14px;
   text-align: center;
 }
 
@@ -462,7 +452,7 @@ a {
 }
 
 .loading-state {
-  min-height: calc(100vh - 64px);
+  min-height: 100vh;
   display: grid;
   place-items: center;
 }
@@ -483,7 +473,6 @@ a {
 }
 
 @media (max-width: 640px) {
-  .site-header,
   .landing,
   .profile-page {
     width: calc(100% - 28px);
