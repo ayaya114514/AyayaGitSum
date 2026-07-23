@@ -109,7 +109,11 @@ export default function App() {
           <span>A</span>
           AyayaGitSum
         </a>
-        <a href="https://github.com" target="_blank" rel="noreferrer">
+        <a
+          href="https://github.com/ayaya114514/gitpulse"
+          target="_blank"
+          rel="noreferrer"
+        >
           GitHub ↗
         </a>
       </header>

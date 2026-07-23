@@ -34,9 +34,11 @@ npm run lint
 
 ## GitHub Pages
 
+线上版本：<https://ayaya114514.github.io/gitpulse/>
+
 仓库自带 `.github/workflows/deploy-pages.yml`。将代码推送到 `main` 后，在
 GitHub 仓库的 **Settings → Pages → Build and deployment** 中选择
 **GitHub Actions**。后续 push 会自动验证并部署 `dist`。
 
 Vite 使用相对资源路径，页面状态使用 `#/user/<username>`，因此既支持
-`<account>.github.io/AyayaGitSum/`，也支持自定义域名。
+`<account>.github.io/gitpulse/`，也支持自定义域名。
