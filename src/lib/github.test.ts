@@ -1,12 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createSummary,
+  fetchProfileAnalysis,
   getActivityByDay,
   getLanguageShares,
   getTopRepositories,
+  GitHubApiError,
   normalizeUsername,
+  validateUsername,
 } from "./github";
-import type { GitHubEvent, GitHubRepository, GitHubUser } from "../types";
+import type {
+  GitHubEvent,
+  GitHubRepository,
+  GitHubUser,
+  RepositoryCoverage,
+} from "../types";
 
 const repository = (
   name: string,
@@ -27,7 +35,7 @@ const repository = (
   topics: [],
 });
 
-const user: GitHubUser = {
+const user = (publicRepositories = 3): GitHubUser => ({
   login: "example",
   name: "Example User",
   avatar_url: "",
@@ -36,15 +44,79 @@ const user: GitHubUser = {
   company: null,
   blog: "",
   location: null,
-  public_repos: 3,
+  public_repos: publicRepositories,
   followers: 0,
   following: 0,
   created_at: "2020-01-01T00:00:00Z",
-};
+});
+
+const event = (
+  id: string,
+  createdAt = "2026-07-20T12:00:00Z",
+): GitHubEvent => ({
+  id,
+  type: "PushEvent",
+  repo: { name: "example/one" },
+  payload: {},
+  created_at: createdAt,
+});
+
+interface ResponseOptions {
+  status?: number;
+  remaining?: number;
+  reset?: number;
+  retryAfter?: number;
+}
+
+function jsonResponse(data: unknown, options: ResponseOptions = {}): Response {
+  const headers = new Headers({ "content-type": "application/json" });
+  if (options.remaining !== undefined) {
+    headers.set("x-ratelimit-remaining", String(options.remaining));
+  }
+  if (options.reset !== undefined) {
+    headers.set("x-ratelimit-reset", String(options.reset));
+  }
+  if (options.retryAfter !== undefined) {
+    headers.set("retry-after", String(options.retryAfter));
+  }
+  return new Response(JSON.stringify(data), {
+    status: options.status ?? 200,
+    headers,
+  });
+}
+
+function completeCoverage(
+  fetchedCount: number,
+  reportedTotal = fetchedCount,
+): RepositoryCoverage {
+  return {
+    fetchedCount,
+    reportedTotal,
+    isComplete: true,
+    reason: "complete",
+  };
+}
+
+function requestedPage(url: string): number | null {
+  const page = new URL(url).searchParams.get("page");
+  return page === null ? null : Number.parseInt(page, 10);
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 describe("GitHub data helpers", () => {
-  it("normalizes usernames", () => {
+  it("normalizes and validates GitHub usernames", () => {
     expect(normalizeUsername("  @@octocat ")).toBe("octocat");
+    expect(validateUsername("octocat")).toBeNull();
+    expect(validateUsername("a-b-9")).toBeNull();
+    expect(validateUsername("")).toBe("请输入 GitHub 用户名。");
+    expect(validateUsername("-octocat")).toContain("不能以连字符开头或结尾");
+    expect(validateUsername("octo--cat")).toContain("单个连字符");
+    expect(validateUsername("octo_cat")).toContain("只能包含");
+    expect(validateUsername("a".repeat(40))).toContain("39 个字符");
   });
 
   it("sorts original repositories by stars", () => {
@@ -72,26 +144,397 @@ describe("GitHub data helpers", () => {
     ]);
   });
 
-  it("groups activity and creates a local summary", () => {
-    const events: GitHubEvent[] = [
+  it("uses the browser-local weekday instead of the UTC weekday", () => {
+    vi.spyOn(Date.prototype, "getDay").mockReturnValue(2);
+
+    const activity = getActivityByDay([event("1")]);
+
+    expect(activity.find((item) => item.day === "周二")?.count).toBe(1);
+    expect(activity.find((item) => item.day === "周一")?.count).toBe(0);
+  });
+
+  it("creates complete and sample-aware summaries", () => {
+    const repositories = [repository("one", "TypeScript", 1)];
+    const languages = [{ name: "TypeScript", count: 1, percentage: 100 }];
+
+    const complete = createSummary(
+      user(1),
+      repositories,
+      languages,
+      [event("1")],
+      completeCoverage(1),
+    );
+    expect(complete).toContain("其中 1 个为原创仓库");
+    expect(complete).toContain("最常见的主要语言是 TypeScript");
+    expect(complete).not.toContain("样本");
+
+    const sample = createSummary(
+      user(500),
+      repositories,
+      languages,
+      [],
       {
-        id: "1",
-        type: "PushEvent",
-        repo: { name: "example/one" },
-        payload: {},
-        created_at: "2026-07-20T12:00:00Z",
+        fetchedCount: 1,
+        reportedTotal: 500,
+        isComplete: false,
+        reason: "page-limit",
       },
-    ];
+    );
+    expect(sample).toContain("本次读取的 1 个仓库样本中");
+    expect(sample).toContain("在已读取仓库中");
+  });
+});
+
+describe("fetchProfileAnalysis", () => {
+  it("rejects invalid usernames before making a request", async () => {
+    const fetchMock = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchProfileAnalysis("bad/name")).rejects.toMatchObject({
+      name: "GitHubApiError",
+      status: 400,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("fetches the user first, paginates repositories, and aggregates the lowest remaining quota", async () => {
+    const firstPage = Array.from({ length: 100 }, (_, index) =>
+      repository(`repo-${index}`, "TypeScript", index),
+    );
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/users/example")) {
+        return jsonResponse(user(101), {
+          remaining: 59,
+          reset: 2_000_000_000,
+        });
+      }
+      if (url.includes("/repos?") && requestedPage(url) === 1) {
+        return jsonResponse(firstPage, {
+          remaining: 56,
+          reset: 2_000_000_000,
+        });
+      }
+      if (url.includes("/repos?") && requestedPage(url) === 2) {
+        return jsonResponse([repository("last", "Go", 1)], {
+          remaining: 52,
+          reset: 2_000_000_000,
+        });
+      }
+      if (url.includes("/events/public")) {
+        return jsonResponse([event("1")], {
+          remaining: 54,
+          reset: 2_000_000_000,
+        });
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const analysis = await fetchProfileAnalysis("example");
+
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      "https://api.github.com/users/example",
+    );
+    expect(analysis.repositories).toHaveLength(101);
+    expect(analysis.repositoryCoverage).toEqual({
+      fetchedCount: 101,
+      reportedTotal: 101,
+      isComplete: true,
+      reason: "complete",
+    });
+    expect(analysis.rateLimit).toEqual({
+      remaining: 52,
+      resetAt: new Date(2_000_000_000_000).toISOString(),
+      retryAfterSeconds: null,
+    });
+    expect(analysis.eventsAvailable).toBe(true);
+    expect(analysis.warnings).toEqual([]);
+  });
+
+  it("caps repository pagination at 300 and labels all derived values as a sample", async () => {
+    const page = (pageNumber: number) =>
+      Array.from({ length: 100 }, (_, index) =>
+        repository(`page-${pageNumber}-${index}`, "TypeScript", index),
+      );
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/users/example")) {
+        return jsonResponse(user(350), { remaining: 59 });
+      }
+      if (url.includes("/events/public")) {
+        return jsonResponse([], { remaining: 55 });
+      }
+      if (requestedPage(url) === 1) {
+        return jsonResponse(page(1), { remaining: 58 });
+      }
+      if (requestedPage(url) === 2) {
+        return jsonResponse(page(2), { remaining: 54 });
+      }
+      if (requestedPage(url) === 3) {
+        return jsonResponse(page(3), { remaining: 53 });
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const analysis = await fetchProfileAnalysis("example");
+
+    expect(analysis.repositoryCoverage).toEqual({
+      fetchedCount: 300,
+      reportedTotal: 350,
+      isComplete: false,
+      reason: "page-limit",
+    });
+    expect(analysis.summary).toContain("本次读取的 300 个仓库样本中");
+    expect(analysis.warnings[0]).toContain("前 300 个仓库");
     expect(
-      getActivityByDay(events).find((item) => item.day === "周一")?.count,
-    ).toBe(1);
-    expect(
-      createSummary(
-        user,
-        [repository("one", "TypeScript", 1)],
-        [{ name: "TypeScript", count: 1, percentage: 100 }],
-        events,
+      fetchMock.mock.calls.some(
+        ([input]) => requestedPage(String(input)) === 4,
       ),
-    ).toContain("最常见的主要语言是 TypeScript");
+    ).toBe(false);
+  });
+
+  it("stops pagination when the remaining quota reaches the safety reserve", async () => {
+    const firstPage = Array.from({ length: 100 }, (_, index) =>
+      repository(`repo-${index}`, "TypeScript", index),
+    );
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/users/example")) {
+        return jsonResponse(user(200), { remaining: 10 });
+      }
+      if (url.includes("/repos?")) {
+        return jsonResponse(firstPage, { remaining: 2 });
+      }
+      if (url.includes("/events/public")) {
+        return jsonResponse([], { remaining: 8 });
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const analysis = await fetchProfileAnalysis("example");
+
+    expect(analysis.repositoryCoverage.reason).toBe("rate-limit");
+    expect(analysis.repositoryCoverage.isComplete).toBe(false);
+    expect(analysis.repositories).toHaveLength(100);
+    expect(analysis.rateLimit.remaining).toBe(2);
+    expect(
+      fetchMock.mock.calls.filter(([input]) =>
+        String(input).includes("/repos?"),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("keeps the profile and activity when the repository endpoint fails", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/users/example")) {
+        return jsonResponse(user(3), { remaining: 10 });
+      }
+      if (url.includes("/repos?")) {
+        return jsonResponse({ message: "failure" }, { status: 500, remaining: 7 });
+      }
+      if (url.includes("/events/public")) {
+        return jsonResponse([event("1")], { remaining: 8 });
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const analysis = await fetchProfileAnalysis("example");
+
+    expect(analysis.user.login).toBe("example");
+    expect(analysis.repositoryCoverage).toMatchObject({
+      fetchedCount: 0,
+      isComplete: false,
+      reason: "request-failed",
+    });
+    expect(analysis.eventsAvailable).toBe(true);
+    expect(analysis.recentEvents).toHaveLength(1);
+    expect(analysis.warnings).toContain(
+      "仓库数据暂时无法读取，相关统计不可用。",
+    );
+    expect(analysis.rateLimit.remaining).toBe(7);
+  });
+
+  it("keeps repository data when the event endpoint has a network failure", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/users/example")) {
+        return jsonResponse(user(1), { remaining: 10 });
+      }
+      if (url.includes("/repos?")) {
+        return jsonResponse([repository("one", "TypeScript", 4)], {
+          remaining: 9,
+        });
+      }
+      if (url.includes("/events/public")) {
+        throw new TypeError("Failed to fetch");
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const analysis = await fetchProfileAnalysis("example");
+
+    expect(analysis.repositories).toHaveLength(1);
+    expect(analysis.totalStars).toBe(4);
+    expect(analysis.eventsAvailable).toBe(false);
+    expect(analysis.recentEvents).toEqual([]);
+    expect(analysis.warnings).toContain("最近活动暂时无法读取。");
+  });
+
+  it("keeps an honest repository sample if a later page fails", async () => {
+    const firstPage = Array.from({ length: 100 }, (_, index) =>
+      repository(`repo-${index}`, "TypeScript", index),
+    );
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/users/example")) {
+        return jsonResponse(user(150), { remaining: 20 });
+      }
+      if (requestedPage(url) === 1) {
+        return jsonResponse(firstPage, { remaining: 18 });
+      }
+      if (requestedPage(url) === 2) {
+        return jsonResponse({ message: "failure" }, { status: 500, remaining: 16 });
+      }
+      if (url.includes("/events/public")) {
+        return jsonResponse([], { remaining: 17 });
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const analysis = await fetchProfileAnalysis("example");
+
+    expect(analysis.repositories).toHaveLength(100);
+    expect(analysis.repositoryCoverage).toMatchObject({
+      fetchedCount: 100,
+      isComplete: false,
+      reason: "request-failed",
+    });
+    expect(analysis.summary).toContain("100 个仓库样本");
+    expect(analysis.rateLimit.remaining).toBe(16);
+  });
+
+  it("collects reset and retry metadata from a degraded optional request", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/users/example")) {
+        return jsonResponse(user(1), {
+          remaining: 10,
+          reset: 2_000_000_000,
+        });
+      }
+      if (url.includes("/repos?")) {
+        return jsonResponse([repository("one", "TypeScript", 1)], {
+          remaining: 9,
+          reset: 2_000_000_000,
+        });
+      }
+      if (url.includes("/events/public")) {
+        return jsonResponse(
+          { message: "secondary rate limit" },
+          {
+            status: 429,
+            remaining: 0,
+            reset: 2_000_000_100,
+            retryAfter: 120,
+          },
+        );
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const analysis = await fetchProfileAnalysis("example");
+
+    expect(analysis.eventsAvailable).toBe(false);
+    expect(analysis.rateLimit).toEqual({
+      remaining: 0,
+      resetAt: new Date(2_000_000_100_000).toISOString(),
+      retryAfterSeconds: 120,
+    });
+  });
+
+  it("normalizes mandatory network, JSON, not-found, and rate-limit errors", async () => {
+    const fetchMock = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", fetchMock);
+
+    fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    await expect(fetchProfileAnalysis("example")).rejects.toMatchObject({
+      name: "GitHubApiError",
+      status: 0,
+      message: "无法连接 GitHub，请检查网络后重试。",
+    });
+
+    fetchMock.mockResolvedValueOnce(
+      new Response("{invalid", {
+        status: 200,
+        headers: { "x-ratelimit-remaining": "9" },
+      }),
+    );
+    await expect(fetchProfileAnalysis("example")).rejects.toMatchObject({
+      name: "GitHubApiError",
+      message: "GitHub 返回的数据格式异常，请稍后再试。",
+    });
+
+    fetchMock.mockResolvedValueOnce(jsonResponse({}, { status: 404, remaining: 8 }));
+    await expect(fetchProfileAnalysis("example")).rejects.toMatchObject({
+      status: 404,
+      message: "没有找到这个 GitHub 用户。",
+    });
+
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(
+        { message: "rate limited" },
+        {
+          status: 429,
+          remaining: 0,
+          reset: 2_000_000_000,
+          retryAfter: 60,
+        },
+      ),
+    );
+    const rateError = await fetchProfileAnalysis("example").catch(
+      (error: unknown) => error,
+    );
+    expect(rateError).toBeInstanceOf(GitHubApiError);
+    expect(rateError).toMatchObject({
+      status: 429,
+      rateLimit: {
+        remaining: 0,
+        resetAt: new Date(2_000_000_000_000).toISOString(),
+        retryAfterSeconds: 60,
+      },
+    });
+
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(
+        { message: "forbidden" },
+        { status: 403, remaining: 7 },
+      ),
+    );
+    await expect(fetchProfileAnalysis("example")).rejects.toMatchObject({
+      status: 403,
+      message: "GitHub 暂时拒绝了这次请求，请稍后再试。",
+    });
+  });
+
+  it("passes through AbortSignal and preserves AbortError", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      expect(init?.signal).toBe(controller.signal);
+      throw controller.signal.reason;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      fetchProfileAnalysis("example", controller.signal),
+    ).rejects.toMatchObject({ name: "AbortError" });
   });
 });

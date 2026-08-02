@@ -20,6 +20,24 @@ const LANGUAGE_COLORS = [
   "#415268",
 ];
 
+function formatResetTime(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
 export function ProfileView({
   analysis,
   loading,
@@ -30,6 +48,21 @@ export function ProfileView({
     ...analysis.activityByDay.map((item) => item.count),
     1,
   );
+  const coverage = analysis.repositoryCoverage;
+  const repositoryDataUnavailable =
+    !coverage.isComplete &&
+    coverage.fetchedCount === 0 &&
+    coverage.reportedTotal > 0;
+  const coverageText = repositoryDataUnavailable
+    ? `仓库详情本次未读取；GitHub 资料显示共有 ${coverage.reportedTotal} 个公开仓库。`
+    : coverage.isComplete
+      ? `仓库统计已覆盖全部 ${coverage.reportedTotal} 个公开仓库。`
+      : `仓库统计基于本次读取的 ${coverage.fetchedCount} / ${coverage.reportedTotal} 个公开仓库样本。`;
+  const rateLimitResetTime = formatResetTime(analysis.rateLimit.resetAt);
+  const hasRateLimitDetails =
+    analysis.rateLimit.remaining !== null ||
+    rateLimitResetTime !== null ||
+    analysis.rateLimit.retryAfterSeconds !== null;
 
   return (
     <main className="profile-page">
@@ -60,15 +93,67 @@ export function ProfileView({
         </div>
       </section>
 
-      <section className="stats" aria-label="资料统计">
+      <section
+        className="generated-summary"
+        aria-labelledby="generated-summary-title"
+      >
+        <div className="section-heading-row">
+          <h2 id="generated-summary-title">Summary</h2>
+          <span>本地规则生成 · 不调用 AI</span>
+        </div>
+        <p>{analysis.summary}</p>
+      </section>
+
+      <aside className="analysis-notes" aria-label="数据范围与状态">
+        <p id="repository-coverage">{coverageText}</p>
+        <p>语言比例按原创仓库的主要语言字段统计，不代表代码量。</p>
+        <p>
+          Activity 与 Recent 来自 GitHub 最近公开事件（最多 100 条），不是全时段统计。
+        </p>
+        {hasRateLimitDetails ? (
+          <p>
+            查询时 GitHub API 剩余额度：
+            {analysis.rateLimit.remaining ?? "未知"}
+            {rateLimitResetTime && analysis.rateLimit.resetAt ? (
+              <>
+                {" "}· 预计 <time dateTime={analysis.rateLimit.resetAt}>{rateLimitResetTime}</time>
+                {" "}重置
+              </>
+            ) : null}
+            {analysis.rateLimit.retryAfterSeconds !== null ? (
+              <> · 建议 {analysis.rateLimit.retryAfterSeconds} 秒后重试</>
+            ) : null}
+          </p>
+        ) : null}
+        {analysis.warnings.length > 0 ? (
+          <ul className="warning-list" aria-label="数据提示">
+            {analysis.warnings.map((warning) => (
+              <li key={warning}>{warning}</li>
+            ))}
+          </ul>
+        ) : null}
+      </aside>
+
+      <section
+        className="stats"
+        aria-label="资料统计"
+        aria-describedby="repository-coverage"
+      >
         {[
           ["Repos", user.public_repos],
-          ["Original", analysis.originalRepositoryCount],
-          ["Stars", analysis.totalStars],
+          [
+            "Original",
+            repositoryDataUnavailable
+              ? "—"
+              : analysis.originalRepositoryCount,
+          ],
+          ["Stars", repositoryDataUnavailable ? "—" : analysis.totalStars],
           ["Followers", user.followers],
         ].map(([label, value]) => (
           <div key={label}>
-            <strong>{compactNumber(value as number)}</strong>
+            <strong>
+              {typeof value === "number" ? compactNumber(value) : value}
+            </strong>
             <span>{label}</span>
           </div>
         ))}
@@ -76,7 +161,10 @@ export function ProfileView({
 
       <div className="data-grid">
         <section className="data-section" aria-labelledby="languages-title">
-          <h2 id="languages-title">Languages</h2>
+          <div className="data-section-heading">
+            <h2 id="languages-title">Languages</h2>
+            <span>按仓库数</span>
+          </div>
           {analysis.languages.length > 0 ? (
             <>
               <div className="language-bar" aria-hidden="true">
@@ -104,31 +192,51 @@ export function ProfileView({
               </ul>
             </>
           ) : (
-            <p className="empty-copy">No data</p>
+            <p className="empty-copy">
+              {repositoryDataUnavailable
+                ? "仓库详情暂时不可用。"
+                : "没有可统计的主要语言。"}
+            </p>
           )}
         </section>
 
         <section className="data-section" aria-labelledby="activity-title">
-          <h2 id="activity-title">Activity</h2>
-          <div className="activity-chart">
-            {analysis.activityByDay.map((item) => (
-              <div className="activity-column" key={item.day}>
-                <div className="activity-track">
-                  <span
-                    style={{
-                      height: `${Math.max(
-                        (item.count / maxActivity) * 100,
-                        4,
-                      )}%`,
-                    }}
-                    title={`${item.day}：${item.count} 条`}
-                  />
-                </div>
-                <strong>{item.count}</strong>
-                <small>{item.day}</small>
-              </div>
-            ))}
+          <div className="data-section-heading">
+            <h2 id="activity-title">Activity</h2>
+            <span>最近最多 100 条 · 浏览器本地时区</span>
           </div>
+          {analysis.eventsAvailable ? (
+            <ul
+              className="activity-chart"
+              aria-label="GitHub 最近最多 100 条公开活动按浏览器本地星期分布"
+            >
+              {analysis.activityByDay.map((item) => (
+                <li
+                  className="activity-column"
+                  key={item.day}
+                  aria-label={`${item.day}：${item.count} 条公开活动`}
+                >
+                  <div className="activity-track" aria-hidden="true">
+                    <span
+                      style={{
+                        height:
+                          item.count === 0
+                            ? "0%"
+                            : `${Math.max(
+                                (item.count / maxActivity) * 100,
+                                6,
+                              )}%`,
+                      }}
+                    />
+                  </div>
+                  <strong>{item.count}</strong>
+                  <small>{item.day}</small>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="empty-copy">公开活动数据暂时不可用。</p>
+          )}
         </section>
       </div>
 
@@ -136,7 +244,12 @@ export function ProfileView({
         className="data-section repositories"
         aria-labelledby="repositories-title"
       >
-        <h2 id="repositories-title">Repositories</h2>
+        <div className="data-section-heading">
+          <h2 id="repositories-title">Repositories</h2>
+          <span>
+            {coverage.fetchedCount} / {coverage.reportedTotal}
+          </span>
+        </div>
         {analysis.topRepositories.length > 0 ? (
           <ul className="repository-list">
             {analysis.topRepositories.map((repository) => (
@@ -154,13 +267,21 @@ export function ProfileView({
             ))}
           </ul>
         ) : (
-          <p className="empty-copy">No repositories</p>
+          <p className="empty-copy">
+            {repositoryDataUnavailable
+              ? "仓库详情暂时不可用。"
+              : coverage.fetchedCount > 0
+                ? "已读取仓库中没有可展示的原创非归档仓库。"
+                : "没有公开仓库。"}
+          </p>
         )}
       </section>
 
       <section className="data-section events" aria-labelledby="events-title">
         <h2 id="events-title">Recent</h2>
-        {analysis.recentEvents.length > 0 ? (
+        {!analysis.eventsAvailable ? (
+          <p className="empty-copy">公开活动数据暂时不可用。</p>
+        ) : analysis.recentEvents.length > 0 ? (
           <ol className="event-list">
             {analysis.recentEvents.slice(0, 6).map((event) => (
               <li key={event.id}>
