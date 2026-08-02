@@ -50,15 +50,37 @@ export interface ActivityDay {
   count: number;
 }
 
+export type RepositoryCoverageReason =
+  | "complete"
+  | "page-limit"
+  | "rate-limit"
+  | "request-failed";
+
+export interface RepositoryCoverage {
+  fetchedCount: number;
+  reportedTotal: number;
+  isComplete: boolean;
+  reason: RepositoryCoverageReason;
+}
+
+export interface GitHubRateLimit {
+  remaining: number | null;
+  resetAt: string | null;
+  retryAfterSeconds: number | null;
+}
+
 export interface ProfileAnalysis {
   user: GitHubUser;
   repositories: GitHubRepository[];
+  repositoryCoverage: RepositoryCoverage;
   topRepositories: GitHubRepository[];
   languages: LanguageShare[];
   activityByDay: ActivityDay[];
   recentEvents: GitHubEvent[];
+  eventsAvailable: boolean;
   totalStars: number;
   originalRepositoryCount: number;
   summary: string;
-  rateLimitRemaining: number | null;
+  warnings: string[];
+  rateLimit: GitHubRateLimit;
 }
