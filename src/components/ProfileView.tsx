@@ -2,6 +2,7 @@ import {
   compactNumber,
   describeEvent,
   formatRelativeDate,
+  formatResetTime,
 } from "../lib/format";
 import type { ProfileAnalysis } from "../types";
 import { SearchForm } from "./SearchForm";
@@ -19,24 +20,6 @@ const LANGUAGE_COLORS = [
   "#506582",
   "#415268",
 ];
-
-function formatResetTime(value: string | null): string | null {
-  if (!value) {
-    return null;
-  }
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return null;
-  }
-
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "numeric",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
-}
 
 export function ProfileView({
   analysis,
@@ -65,7 +48,7 @@ export function ProfileView({
     analysis.rateLimit.retryAfterSeconds !== null;
 
   return (
-    <main className="profile-page">
+    <main className="profile-page" aria-busy={loading}>
       <section className="profile-toolbar" aria-label="搜索其他用户">
         <SearchForm
           key={user.login}
@@ -106,7 +89,9 @@ export function ProfileView({
 
       <aside className="analysis-notes" aria-label="数据范围与状态">
         <p id="repository-coverage">{coverageText}</p>
-        <p>语言比例按原创仓库的主要语言字段统计，不代表代码量。</p>
+        <p>
+          Stars 与语言比例只统计原创仓库；语言按主要语言字段计数，不代表代码量。
+        </p>
         <p>
           Activity 与 Recent 来自 GitHub 最近公开事件（最多 100 条），不是全时段统计。
         </p>
@@ -246,9 +231,7 @@ export function ProfileView({
       >
         <div className="data-section-heading">
           <h2 id="repositories-title">Repositories</h2>
-          <span>
-            {coverage.fetchedCount} / {coverage.reportedTotal}
-          </span>
+          <span>原创 · 按 Stars</span>
         </div>
         {analysis.topRepositories.length > 0 ? (
           <ul className="repository-list">
@@ -283,7 +266,7 @@ export function ProfileView({
           <p className="empty-copy">公开活动数据暂时不可用。</p>
         ) : analysis.recentEvents.length > 0 ? (
           <ol className="event-list">
-            {analysis.recentEvents.slice(0, 6).map((event) => (
+            {analysis.recentEvents.map((event) => (
               <li key={event.id}>
                 <span className="event-marker" aria-hidden="true" />
                 <p>{describeEvent(event)}</p>
@@ -294,7 +277,7 @@ export function ProfileView({
             ))}
           </ol>
         ) : (
-          <p className="empty-copy">No activity</p>
+          <p className="empty-copy">最近没有公开活动。</p>
         )}
       </section>
     </main>

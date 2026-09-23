@@ -13,6 +13,8 @@ const API_ROOT = "https://api.github.com";
 export const REPOSITORIES_PER_PAGE = 100;
 export const MAX_REPOSITORY_PAGES = 3;
 const REPOSITORY_PAGINATION_RESERVE = 2;
+export const REQUEST_TIMEOUT_MS = 10_000;
+const RECENT_EVENT_LIMIT = 6;
 const API_HEADERS = {
   Accept: "application/vnd.github+json",
   "X-GitHub-Api-Version": "2022-11-28",
@@ -132,6 +134,13 @@ function isRateLimitResponse(
   );
 }
 
+export function isRateLimitError(error: unknown): error is GitHubApiError {
+  return (
+    error instanceof GitHubApiError &&
+    isRateLimitResponse(error.status, error.rateLimit)
+  );
+}
+
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
 }
@@ -148,6 +157,46 @@ function throwIfAborted(error: unknown, signal?: AbortSignal): void {
 async function request<T>(
   path: string,
   signal?: AbortSignal,
+): Promise<ApiResponse<T>> {
+  // Each request gets its own timeout so a slow optional request degrades to
+  // a partial result instead of discarding data that was already read.
+  const controller = new AbortController();
+  let timedOut = false;
+  const timeoutId = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, REQUEST_TIMEOUT_MS);
+  const abortFromParent = () => controller.abort(signal?.reason);
+  if (signal?.aborted) {
+    abortFromParent();
+  } else {
+    signal?.addEventListener("abort", abortFromParent, { once: true });
+  }
+
+  try {
+    return await requestOnce<T>(path, controller.signal);
+  } catch (error) {
+    if (signal?.aborted) {
+      throw signal.reason ?? error;
+    }
+    if (timedOut) {
+      throw new GitHubApiError(
+        "请求 GitHub 数据超时，请检查网络后重试。",
+        0,
+        EMPTY_RATE_LIMIT,
+        { cause: error },
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+    signal?.removeEventListener("abort", abortFromParent);
+  }
+}
+
+async function requestOnce<T>(
+  path: string,
+  signal: AbortSignal,
 ): Promise<ApiResponse<T>> {
   let response: Response;
   try {
@@ -196,6 +245,7 @@ async function request<T>(
   try {
     data = (await response.json()) as T;
   } catch (error) {
+    throwIfAborted(error, signal);
     throw new GitHubApiError(
       "GitHub 返回的数据格式异常，请稍后再试。",
       response.status,
@@ -385,11 +435,9 @@ async function fetchRepositories(
       throwIfAborted(error, signal);
       const rateLimit =
         error instanceof GitHubApiError ? error.rateLimit : EMPTY_RATE_LIMIT;
-      const failureReason =
-        error instanceof GitHubApiError &&
-        isRateLimitResponse(error.status, error.rateLimit)
-          ? "rate-limit"
-          : "request-failed";
+      const failureReason = isRateLimitError(error)
+        ? "rate-limit"
+        : "request-failed";
       let warning: string;
       if (failureReason === "rate-limit") {
         warning =
@@ -574,7 +622,7 @@ export async function fetchProfileAnalysis(
   }
 
   const repositories = repositoryResult.repositories;
-  const recentEvents = eventResult.events.slice(0, 12);
+  const recentEvents = eventResult.events.slice(0, RECENT_EVENT_LIMIT);
   const languages = getLanguageShares(repositories);
   const originalRepositories = repositories.filter(
     (repository) => !repository.fork,
@@ -589,7 +637,7 @@ export async function fetchProfileAnalysis(
     activityByDay: getActivityByDay(eventResult.events),
     recentEvents,
     eventsAvailable: eventResult.available,
-    totalStars: repositories.reduce(
+    totalStars: originalRepositories.reduce(
       (sum, repository) => sum + repository.stargazers_count,
       0,
     ),

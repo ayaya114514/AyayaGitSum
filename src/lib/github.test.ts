@@ -7,6 +7,7 @@ import {
   getTopRepositories,
   GitHubApiError,
   normalizeUsername,
+  REQUEST_TIMEOUT_MS,
   validateUsername,
 } from "./github";
 import type {
@@ -95,6 +96,17 @@ function completeCoverage(
     isComplete: true,
     reason: "complete",
   };
+}
+
+function hangUntilAborted(
+  _input: Parameters<typeof fetch>[0],
+  init?: RequestInit,
+): Promise<Response> {
+  return new Promise((_resolve, reject) => {
+    init?.signal?.addEventListener("abort", () =>
+      reject(new DOMException("aborted", "AbortError")),
+    );
+  });
 }
 
 function requestedPage(url: string): number | null {
@@ -524,17 +536,124 @@ describe("fetchProfileAnalysis", () => {
     });
   });
 
-  it("passes through AbortSignal and preserves AbortError", async () => {
+  it("forwards caller aborts to fetch and preserves AbortError", async () => {
     const controller = new AbortController();
     controller.abort();
     const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
-      expect(init?.signal).toBe(controller.signal);
-      throw controller.signal.reason;
+      expect(init?.signal?.aborted).toBe(true);
+      throw init?.signal?.reason;
     });
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(
       fetchProfileAnalysis("example", controller.signal),
     ).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("keeps AbortError when the caller aborts while the body is being read", async () => {
+    const controller = new AbortController();
+    const fetchMock = vi.fn<typeof fetch>(async () => {
+      const response = jsonResponse(user(1), { remaining: 10 });
+      vi.spyOn(response, "json").mockImplementation(async () => {
+        controller.abort();
+        throw new DOMException("aborted", "AbortError");
+      });
+      return response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      fetchProfileAnalysis("example", controller.signal),
+    ).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("reports a timeout when the mandatory user request hangs", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal("fetch", vi.fn<typeof fetch>(hangUntilAborted));
+
+      const pending = fetchProfileAnalysis("example").catch(
+        (error: unknown) => error,
+      );
+      await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS);
+
+      await expect(pending).resolves.toMatchObject({
+        name: "GitHubApiError",
+        status: 0,
+        message: "请求 GitHub 数据超时，请检查网络后重试。",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps repository data when only the event request times out", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+        const url = String(input);
+        if (url.endsWith("/users/example")) {
+          return jsonResponse(user(1), { remaining: 10 });
+        }
+        if (url.includes("/repos?")) {
+          return jsonResponse([repository("one", "TypeScript", 4)], {
+            remaining: 9,
+          });
+        }
+        return hangUntilAborted(input, init);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      const pending = fetchProfileAnalysis("example");
+      await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS);
+      const analysis = await pending;
+
+      expect(analysis.repositories).toHaveLength(1);
+      expect(analysis.eventsAvailable).toBe(false);
+      expect(analysis.warnings).toContain("最近活动暂时无法读取。");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("counts stars from original repositories and keeps six recent events", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/users/example")) {
+        return jsonResponse(user(2), { remaining: 10 });
+      }
+      if (url.includes("/repos?")) {
+        return jsonResponse(
+          [
+            repository("mine", "TypeScript", 4),
+            repository("forked", "Go", 100, true),
+          ],
+          { remaining: 9 },
+        );
+      }
+      if (url.includes("/events/public")) {
+        return jsonResponse(
+          Array.from({ length: 10 }, (_, index) => event(String(index))),
+          { remaining: 8 },
+        );
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const analysis = await fetchProfileAnalysis("example");
+
+    expect(analysis.totalStars).toBe(4);
+    expect(analysis.recentEvents.map((item) => item.id)).toEqual([
+      "0",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+    ]);
+    expect(
+      analysis.activityByDay.reduce((sum, item) => sum + item.count, 0),
+    ).toBe(10);
   });
 });

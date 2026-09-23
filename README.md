@@ -31,14 +31,20 @@ secret、AI API 或 API key。页面中的总结是浏览器根据仓库数、�
   已读取数量与 GitHub 报告的公开仓库总数；遇到 300 个上限、剩余额度不足或
   请求失败时会明确标记为 partial；Stars、Languages、Repositories 以及总结中
   的仓库详情均以已读取样本为准。
+- Stars 只累加已读取的非 fork 仓库；Repositories 展示 Stars 最多的 6 个非
+  fork、未归档仓库。
 - Languages 按“有 primary language 的非 fork 仓库数量”计算，并非代码行数或
   GitHub language bytes。
-- Activity 只读取 public events 的第一页，最多 100 条；GitHub 不公开的活动
-  不在统计范围内。仓库或活动请求单独失败时，用户资料仍可显示并附带 warning。
+- Activity 只读取 public events 的第一页，最多 100 条；Recent 展示其中最新的
+  6 条。GitHub 当前的 PushEvent payload 已不含 commit 数，因此 Recent
+  只显示推送的分支，不估算 commit 数。GitHub 不公开的活动不在统计范围内。
+- 每个请求单独有 10 秒超时。用户资料请求失败或超时会显示错误；仓库或活动
+  请求单独失败、超时时，用户资料仍可显示，并附带 warning 与已读取的部分数据。
 
 匿名 REST 请求按来源 IP 共享[每小时 60 次的 primary rate limit][rate-limit]。
 一次未缓存的查询通常使用 3 次请求，仓库分页时最多 5 次；页面会展示 GitHub
-返回的剩余额度与 reset/retry 信息。结果会在当前浏览器 session 中缓存 5 分钟，
+返回的剩余额度与 reset/retry 信息，额度耗尽导致查询失败时也会在错误提示里
+给出预计重置时间。结果会在当前浏览器 session 中缓存 5 分钟，
 相同查询也会去重，以减少重复请求。
 
 [rate-limit]: https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api

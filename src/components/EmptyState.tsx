@@ -2,10 +2,15 @@ import { SearchForm } from "./SearchForm";
 
 interface EmptyStateProps {
   error: string | null;
+  initialValue?: string;
   onSearch: (username: string) => void;
 }
 
-export function EmptyState({ error, onSearch }: EmptyStateProps) {
+export function EmptyState({
+  error,
+  initialValue = "",
+  onSearch,
+}: EmptyStateProps) {
   return (
     <main className="landing">
       <section aria-labelledby="landing-title">
@@ -16,7 +21,7 @@ export function EmptyState({ error, onSearch }: EmptyStateProps) {
         <p className="landing-description">
           输入用户名，查看 GitHub 资料、语言与热门仓库。
         </p>
-        <SearchForm onSearch={onSearch} />
+        <SearchForm initialValue={initialValue} onSearch={onSearch} />
         {error ? (
           <p className="error-message" role="alert">
             {error}
