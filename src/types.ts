@@ -34,8 +34,13 @@ export interface GitHubEvent {
   created_at: string;
   payload: {
     action?: string;
+    // Current PushEvent payloads no longer include `size`; keep it optional
+    // for older payloads and fall back to `ref`.
     size?: number;
+    ref?: string | null;
     ref_type?: string;
+    pull_request?: { merged?: boolean | null };
+    issue?: { pull_request?: unknown };
   };
 }
 

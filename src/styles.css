@@ -136,7 +136,7 @@ a {
 }
 
 .search-form input::placeholder {
-  color: #656c75;
+  color: #7c838d;
 }
 
 .search-form button {
@@ -247,7 +247,7 @@ a {
   margin: 0;
   color: var(--muted);
   font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -255,8 +255,8 @@ a {
 
 .section-heading-row span,
 .data-section-heading span {
-  color: #69717c;
-  font-size: 10px;
+  color: var(--muted);
+  font-size: 12px;
   white-space: nowrap;
 }
 
@@ -278,7 +278,7 @@ a {
 .analysis-notes p {
   margin: 0;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.5;
 }
 
@@ -288,7 +288,7 @@ a {
   margin: 2px 0 0;
   padding: 0;
   color: #d2a66f;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.5;
   list-style: none;
 }
@@ -314,15 +314,18 @@ a {
 }
 
 .stats strong {
+  height: 28px;
+  overflow: hidden;
   font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
   font-size: 20px;
   font-weight: 500;
+  line-height: 28px;
 }
 
 .stats span {
-  margin-top: 5px;
+  margin-top: 4px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .data-grid {
@@ -353,7 +356,7 @@ a {
   margin: 0 0 22px;
   color: var(--muted);
   font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -392,7 +395,7 @@ a {
   grid-template-columns: 7px 1fr auto;
   align-items: center;
   gap: 9px;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .language-list strong {
@@ -405,7 +408,7 @@ a {
 .language-list li > span:last-child {
   color: var(--muted);
   font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .language-dot {
@@ -449,14 +452,14 @@ a {
 .activity-column strong {
   color: #c9cdd3;
   font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 500;
 }
 
 .activity-column small {
   overflow: hidden;
   color: var(--muted);
-  font-size: 9px;
+  font-size: 12px;
   text-overflow: clip;
   white-space: nowrap;
 }
@@ -475,7 +478,7 @@ a {
   align-items: center;
   gap: 16px;
   border-top: 1px solid var(--line);
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .repository-list li:first-child,
@@ -498,7 +501,7 @@ a {
 .repository-list span {
   overflow: hidden;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -520,14 +523,15 @@ a {
   margin: 0;
   overflow: hidden;
   color: #c9cdd3;
-  font-size: 12px;
+  font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .event-list time {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .event-marker {
@@ -537,7 +541,15 @@ a {
 .empty-copy {
   margin: 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
+}
+
+.profile-page > * {
+  transition: opacity 0.15s ease;
+}
+
+.profile-page[aria-busy="true"] > :not(.profile-toolbar) {
+  opacity: 0.45;
 }
 
 .loading-state {
@@ -594,10 +606,6 @@ a {
     font-size: 17px;
   }
 
-  .stats span {
-    font-size: 9px;
-  }
-
   .data-grid {
     grid-template-columns: 1fr;
   }
@@ -621,9 +629,6 @@ a {
     gap: 10px;
   }
 
-  .event-list time {
-    font-size: 10px;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {

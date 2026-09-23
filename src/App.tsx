@@ -1,167 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { EmptyState } from "./components/EmptyState";
 import { ProfileView } from "./components/ProfileView";
+import { describeRequestError } from "./lib/format";
 import { fetchProfileAnalysis, normalizeUsername } from "./lib/github";
+import { createProfileCache } from "./lib/profileCache";
+import { userHash, usernameFromHash } from "./lib/route";
 import type { ProfileAnalysis } from "./types";
-
-const PROFILE_CACHE_TTL_MS = 5 * 60 * 1000;
-const REQUEST_TIMEOUT_MS = 15_000;
-const MAX_CACHED_PROFILES = 12;
-const SESSION_CACHE_PREFIX = "ayayagitsum.profile.v2:";
-const SESSION_CACHE_INDEX_KEY = `${SESSION_CACHE_PREFIX}index`;
-
-interface CachedProfile {
-  analysis: ProfileAnalysis;
-  expiresAt: number;
-}
 
 interface ActiveRequest {
   cacheKey: string;
   controller: AbortController;
   requestId: number;
-  timeoutId: ReturnType<typeof setTimeout>;
 }
 
-const profileCache = new Map<string, CachedProfile>();
-
-interface SessionCacheIndexEntry {
-  cacheKey: string;
-  expiresAt: number;
-}
-
-function isProfileAnalysis(value: unknown): value is ProfileAnalysis {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-
-  const candidate = value as Record<string, unknown>;
-  const user = candidate.user;
-  return (
-    typeof candidate.summary === "string" &&
-    Array.isArray(candidate.repositories) &&
-    Array.isArray(candidate.warnings) &&
-    typeof candidate.eventsAvailable === "boolean" &&
-    !!candidate.repositoryCoverage &&
-    typeof candidate.repositoryCoverage === "object" &&
-    !!candidate.rateLimit &&
-    typeof candidate.rateLimit === "object" &&
-    !!user &&
-    typeof user === "object" &&
-    "login" in user &&
-    typeof user.login === "string"
-  );
-}
-
-function getCachedProfile(cacheKey: string): ProfileAnalysis | null {
-  const now = Date.now();
-  const cached = profileCache.get(cacheKey);
-  if (cached) {
-    if (cached.expiresAt > now) {
-      profileCache.delete(cacheKey);
-      profileCache.set(cacheKey, cached);
-      return cached.analysis;
-    }
-    profileCache.delete(cacheKey);
-  }
-
-  try {
-    const stored = window.sessionStorage.getItem(
-      `${SESSION_CACHE_PREFIX}${cacheKey}`,
-    );
-    if (!stored) {
-      return null;
-    }
-
-    const parsed = JSON.parse(stored) as Partial<CachedProfile>;
-    if (
-      typeof parsed.expiresAt !== "number" ||
-      parsed.expiresAt <= now ||
-      !isProfileAnalysis(parsed.analysis)
-    ) {
-      window.sessionStorage.removeItem(`${SESSION_CACHE_PREFIX}${cacheKey}`);
-      return null;
-    }
-
-    const restored = {
-      analysis: parsed.analysis,
-      expiresAt: parsed.expiresAt,
-    };
-    profileCache.set(cacheKey, restored);
-    return restored.analysis;
-  } catch {
-    return null;
-  }
-}
-
-function cacheProfile(cacheKey: string, analysis: ProfileAnalysis) {
-  const now = Date.now();
-  const cached = {
-    analysis,
-    expiresAt: now + PROFILE_CACHE_TTL_MS,
-  };
-
-  for (const [key, entry] of profileCache) {
-    if (entry.expiresAt <= now) {
-      profileCache.delete(key);
-    }
-  }
-  profileCache.delete(cacheKey);
-  profileCache.set(cacheKey, cached);
-  while (profileCache.size > MAX_CACHED_PROFILES) {
-    const oldestKey = profileCache.keys().next().value as string | undefined;
-    if (!oldestKey) {
-      break;
-    }
-    profileCache.delete(oldestKey);
-  }
-
-  try {
-    const rawIndex = window.sessionStorage.getItem(SESSION_CACHE_INDEX_KEY);
-    const parsedIndex: unknown = rawIndex ? JSON.parse(rawIndex) : [];
-    const validEntries = Array.isArray(parsedIndex)
-      ? parsedIndex.filter(
-          (entry): entry is SessionCacheIndexEntry =>
-            !!entry &&
-            typeof entry === "object" &&
-            "cacheKey" in entry &&
-            typeof entry.cacheKey === "string" &&
-            "expiresAt" in entry &&
-            typeof entry.expiresAt === "number",
-        )
-      : [];
-    const nextIndex: SessionCacheIndexEntry[] = [];
-
-    for (const entry of validEntries) {
-      if (entry.expiresAt <= now) {
-        window.sessionStorage.removeItem(
-          `${SESSION_CACHE_PREFIX}${entry.cacheKey}`,
-        );
-      } else if (entry.cacheKey !== cacheKey) {
-        nextIndex.push(entry);
-      }
-    }
-    nextIndex.push({ cacheKey, expiresAt: cached.expiresAt });
-    while (nextIndex.length > MAX_CACHED_PROFILES) {
-      const removed = nextIndex.shift();
-      if (removed) {
-        window.sessionStorage.removeItem(
-          `${SESSION_CACHE_PREFIX}${removed.cacheKey}`,
-        );
-      }
-    }
-
-    window.sessionStorage.setItem(
-      `${SESSION_CACHE_PREFIX}${cacheKey}`,
-      JSON.stringify(cached),
-    );
-    window.sessionStorage.setItem(
-      SESSION_CACHE_INDEX_KEY,
-      JSON.stringify(nextIndex),
-    );
-  } catch {
-    // Memory caching still works when sessionStorage is unavailable or full.
-  }
-}
+const profileCache = createProfileCache();
 
 function isAbortError(error: unknown): boolean {
   return (
@@ -172,26 +24,15 @@ function isAbortError(error: unknown): boolean {
   );
 }
 
-function usernameFromHash(): string {
-  const match = window.location.hash.match(/^#\/user\/([^/?#]+)/);
-  if (!match) {
-    return "";
-  }
-  try {
-    return decodeURIComponent(match[1]);
-  } catch {
-    return "";
-  }
-}
-
-function setUserHash(username: string) {
-  window.location.hash = `/user/${encodeURIComponent(username)}`;
+function currentHashUsername(): string {
+  return usernameFromHash(window.location.hash);
 }
 
 export default function App() {
   const [analysis, setAnalysis] = useState<ProfileAnalysis | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [routeUsername, setRouteUsername] = useState("");
   const requestId = useRef(0);
   const activeRequest = useRef<ActiveRequest | null>(null);
 
@@ -202,7 +43,6 @@ export default function App() {
       return;
     }
 
-    clearTimeout(request.timeoutId);
     request.controller.abort();
     activeRequest.current = null;
   }, []);
@@ -228,7 +68,7 @@ export default function App() {
     requestId.current = currentRequest;
     setError(null);
 
-    const cached = getCachedProfile(cacheKey);
+    const cached = profileCache.get(cacheKey);
     if (cached) {
       setAnalysis(cached);
       setLoading(false);
@@ -237,16 +77,10 @@ export default function App() {
     }
 
     const controller = new AbortController();
-    let timedOut = false;
-    const timeoutId = setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-    }, REQUEST_TIMEOUT_MS);
     activeRequest.current = {
       cacheKey,
       controller,
       requestId: currentRequest,
-      timeoutId,
     };
     setLoading(true);
 
@@ -256,32 +90,19 @@ export default function App() {
         controller.signal,
       );
       if (requestId.current === currentRequest) {
-        cacheProfile(cacheKey, nextAnalysis);
+        profileCache.set(cacheKey, nextAnalysis);
         setAnalysis(nextAnalysis);
         document.title = `${nextAnalysis.user.name ?? nextAnalysis.user.login} · AyayaGitSum`;
       }
     } catch (requestError) {
-      if (requestId.current !== currentRequest) {
+      if (requestId.current !== currentRequest || isAbortError(requestError)) {
         return;
       }
 
-      if (timedOut) {
-        setAnalysis(null);
-        setError("请求 GitHub 数据超时，请检查网络后重试。");
-        document.title = "AyayaGitSum";
-      } else if (isAbortError(requestError)) {
-        return;
-      } else {
-        setAnalysis(null);
-        setError(
-          requestError instanceof Error
-            ? requestError.message
-            : "发生了未知错误，请稍后再试。",
-        );
-        document.title = "AyayaGitSum";
-      }
+      setAnalysis(null);
+      setError(describeRequestError(requestError));
+      document.title = "AyayaGitSum";
     } finally {
-      clearTimeout(timeoutId);
       if (activeRequest.current?.requestId === currentRequest) {
         activeRequest.current = null;
       }
@@ -293,7 +114,8 @@ export default function App() {
 
   useEffect(() => {
     function handleHashChange() {
-      const username = usernameFromHash();
+      const username = currentHashUsername();
+      setRouteUsername(username);
       if (username) {
         void loadProfile(username);
       } else {
@@ -318,11 +140,11 @@ export default function App() {
     if (!normalized) {
       return;
     }
-    if (normalized.toLowerCase() === usernameFromHash().toLowerCase()) {
+    if (normalized.toLowerCase() === currentHashUsername().toLowerCase()) {
       void loadProfile(normalized);
     } else {
       abortActiveRequest();
-      setUserHash(normalized);
+      window.location.hash = userHash(normalized);
     }
   }
 
@@ -340,7 +162,12 @@ export default function App() {
           onSearch={handleSearch}
         />
       ) : (
-        <EmptyState error={error} onSearch={handleSearch} />
+        <EmptyState
+          key={routeUsername}
+          error={error}
+          initialValue={routeUsername}
+          onSearch={handleSearch}
+        />
       )}
     </div>
   );
