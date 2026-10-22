@@ -30,7 +30,8 @@ secret、AI API 或 API key。页面中的总结是浏览器根据仓库数、�
   读取 3 页（300 个）。页面会显示
   已读取数量与 GitHub 报告的公开仓库总数；遇到 300 个上限、剩余额度不足或
   请求失败时会明确标记为 partial；Stars、Languages、Repositories 以及总结中
-  的仓库详情均以已读取样本为准。
+  的仓库详情均以已读取样本为准。剩余额度足够（读完所有页后仍保留安全余量）
+  时，各页会同时请求以减少等待，结果仍按页序合并；额度紧张时逐页读取。
 - Stars 只累加已读取的非 fork 仓库；Repositories 展示 Stars 最多的 6 个非
   fork、未归档仓库。
 - Languages 按“有 primary language 的非 fork 仓库数量”计算，并非代码行数或

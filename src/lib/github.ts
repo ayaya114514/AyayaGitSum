@@ -405,9 +405,29 @@ function unavailableRepositoryResult(
   };
 }
 
+async function requestRepositoryPage(
+  username: string,
+  page: number,
+  signal?: AbortSignal,
+): Promise<ApiResponse<GitHubRepository[]>> {
+  const response = await request<GitHubRepository[]>(
+    `/users/${encodeURIComponent(username)}/repos?per_page=${REPOSITORIES_PER_PAGE}&sort=updated&page=${page}`,
+    signal,
+  );
+  if (!Array.isArray(response.data)) {
+    throw new GitHubApiError(
+      "GitHub 返回的数据格式异常，请稍后再试。",
+      200,
+      response.rateLimit,
+    );
+  }
+  return response;
+}
+
 async function fetchRepositories(
   username: string,
   reportedTotal: number,
+  quotaLeft: number | null,
   signal?: AbortSignal,
 ): Promise<RepositoryFetchResult> {
   if (reportedTotal === 0) {
@@ -417,20 +437,33 @@ async function fetchRepositories(
   const repositories: GitHubRepository[] = [];
   const rateLimits: GitHubRateLimit[] = [];
 
+  // public_repos says how many pages there are; when the quota left after the
+  // user request covers all of them plus the reserve, request them together
+  // instead of one round trip per page. Results are still read in page order.
+  const plannedPages = Math.min(
+    MAX_REPOSITORY_PAGES,
+    Math.ceil(reportedTotal / REPOSITORIES_PER_PAGE),
+  );
+  const prefetched = new Map<number, Promise<ApiResponse<GitHubRepository[]>>>();
+  if (
+    plannedPages > 1 &&
+    quotaLeft !== null &&
+    quotaLeft - plannedPages >= REPOSITORY_PAGINATION_RESERVE
+  ) {
+    for (let page = 1; page <= plannedPages; page += 1) {
+      const pending = requestRepositoryPage(username, page, signal);
+      // Rejections are handled when the loop reaches the page (or ignored if
+      // an earlier page already ended the scan).
+      pending.catch(() => undefined);
+      prefetched.set(page, pending);
+    }
+  }
+
   for (let page = 1; page <= MAX_REPOSITORY_PAGES; page += 1) {
     let response: ApiResponse<GitHubRepository[]>;
     try {
-      response = await request<GitHubRepository[]>(
-        `/users/${encodeURIComponent(username)}/repos?per_page=${REPOSITORIES_PER_PAGE}&sort=updated&page=${page}`,
-        signal,
-      );
-      if (!Array.isArray(response.data)) {
-        throw new GitHubApiError(
-          "GitHub 返回的数据格式异常，请稍后再试。",
-          200,
-          response.rateLimit,
-        );
-      }
+      response = await (prefetched.get(page) ??
+        requestRepositoryPage(username, page, signal));
     } catch (error) {
       throwIfAborted(error, signal);
       const rateLimit =
@@ -484,6 +517,7 @@ async function fetchRepositories(
     }
 
     if (
+      !prefetched.has(page + 1) &&
       response.rateLimit.remaining !== null &&
       response.rateLimit.remaining <= REPOSITORY_PAGINATION_RESERVE
     ) {
@@ -606,7 +640,7 @@ export async function fetchProfileAnalysis(
     };
   } else if (userResponse.rateLimit.remaining === 1 && user.public_repos > 0) {
     [repositoryResult, eventResult] = await Promise.all([
-      fetchRepositories(username, user.public_repos, signal),
+      fetchRepositories(username, user.public_repos, 1, signal),
       Promise.resolve({
         events: [],
         available: false,
@@ -615,8 +649,15 @@ export async function fetchProfileAnalysis(
       }),
     ]);
   } else {
+    const remaining = userResponse.rateLimit.remaining;
     [repositoryResult, eventResult] = await Promise.all([
-      fetchRepositories(username, user.public_repos, signal),
+      // The events request runs alongside and spends one of the remaining calls.
+      fetchRepositories(
+        username,
+        user.public_repos,
+        remaining === null ? null : remaining - 1,
+        signal,
+      ),
       fetchEvents(username, signal),
     ]);
   }
