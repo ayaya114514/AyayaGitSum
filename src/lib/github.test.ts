@@ -307,6 +307,52 @@ describe("fetchProfileAnalysis", () => {
     ).toBe(false);
   });
 
+  it("requests every planned repository page at once when the quota allows", async () => {
+    const page = (pageNumber: number, length = 100) =>
+      Array.from({ length }, (_, index) =>
+        repository(`page-${pageNumber}-${index}`, "TypeScript", index),
+      );
+    let releaseFirstPage!: () => void;
+    const firstPageGate = new Promise<void>((resolve) => {
+      releaseFirstPage = resolve;
+    });
+    const requestedPages: number[] = [];
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/users/example")) {
+        return jsonResponse(user(250), { remaining: 59 });
+      }
+      if (url.includes("/events/public")) {
+        return jsonResponse([], { remaining: 57 });
+      }
+      const pageNumber = requestedPage(url);
+      if (pageNumber !== null) requestedPages.push(pageNumber);
+      if (pageNumber === 1) {
+        await firstPageGate;
+        return jsonResponse(page(1), { remaining: 56 });
+      }
+      if (pageNumber === 2) return jsonResponse(page(2), { remaining: 55 });
+      if (pageNumber === 3) return jsonResponse(page(3, 50), { remaining: 54 });
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pending = fetchProfileAnalysis("example");
+    await vi.waitFor(() => expect(requestedPages).toEqual([1, 2, 3]));
+    releaseFirstPage();
+    const analysis = await pending;
+
+    expect(analysis.repositories.map((repo) => repo.name).slice(0, 1)).toEqual([
+      "page-1-0",
+    ]);
+    expect(analysis.repositoryCoverage).toEqual({
+      fetchedCount: 250,
+      reportedTotal: 250,
+      isComplete: true,
+      reason: "complete",
+    });
+  });
+
   it("stops pagination when the remaining quota reaches the safety reserve", async () => {
     const firstPage = Array.from({ length: 100 }, (_, index) =>
       repository(`repo-${index}`, "TypeScript", index),
@@ -314,7 +360,7 @@ describe("fetchProfileAnalysis", () => {
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
       if (url.endsWith("/users/example")) {
-        return jsonResponse(user(200), { remaining: 10 });
+        return jsonResponse(user(200), { remaining: 4 });
       }
       if (url.includes("/repos?")) {
         return jsonResponse(firstPage, { remaining: 2 });
